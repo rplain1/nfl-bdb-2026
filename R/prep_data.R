@@ -75,8 +75,9 @@ load_raw_data <- function(con) {
       "
         drop table if exists tracking_output;
         create table tracking_output as
-        select t.*, s.week from read_csv('data/train/output_*.csv', quote='\"') t
-        left join (select distinct game_id, week from supplementary_data) s on t.game_id = s.game_id
+        select t.*, s.week, s.distance_to_goal, ti.play_direction from read_csv('data/train/output_*.csv', quote='\"') t
+        left join (select distinct game_id, play_id, week, distance_to_goal from supplementary_data) s on t.game_id = s.game_id and t.play_id = s.play_id
+        left join (select distinct game_id, play_id, play_direction from tracking_input) ti on t.game_id = t.game_id and ti.play_id = t.play_id
         "
     )
   )
@@ -99,25 +100,41 @@ convert_tracking_cortesian <- function(.data) {
 
 
 standardize_tracking_directions <- function(.data) {
-  .data |>
+  .data <- .data |>
     mutate(
       x = ifelse(play_direction == 'right', x, 120 - x),
       y = ifelse(play_direction == 'right', y, 53.3 - y),
-      vx = ifelse(play_direction == 'right', vx, -1 * vx),
-      vy = ifelse(play_direction == 'right', vy, -1 * vy),
-      ox = ifelse(play_direction == 'right', ox, -1 * ox),
-      oy = ifelse(play_direction == 'right', oy, -1 * oy)
     )
+
+  if (all('vx' %in% colnames(.data))) {
+    cli::cli_alert_info("`vy` detected, applying additional transformations")
+    .data <- .data |>
+      mutate(
+        vx = ifelse(play_direction == 'right', vx, -1 * vx),
+        vy = ifelse(play_direction == 'right', vy, -1 * vy),
+        ox = ifelse(play_direction == 'right', ox, -1 * ox),
+        oy = ifelse(play_direction == 'right', oy, -1 * oy)
+      )
+  }
+
+  .data
 }
 
 augment_mirror_tracking <- function(.data) {
   .data2 <- .data |>
     mutate(
       y = 53.3 - y, # Flip y values
-      vy = -1 * vy, # Reverse vy
-      oy = -1 * oy, # Reverse oy
       mirrored = TRUE # Mark as mirrored
     )
+
+  if (all('vy' %in% colnames(.data))) {
+    cli::cli_alert_info("`vy` detected, applying additional transformations")
+    .data2 <- .data2 |>
+      mutate(
+        vy = -1 * vy, # Reverse vy
+        oy = -1 * oy, # Reverse oy
+      )
+  }
 
   .data <- .data |> mutate(mirrored = FALSE)
 
@@ -152,7 +169,82 @@ get_prepped_data <- function(con, weeks = NULL) {
     add_relative_positions()
 }
 
-get_prepped_data(con) |> count()
-get_prepped_data(con, weeks = 1) |> count()
+get_prepped_output <- function(con, weeks = NULL) {
+  x <- tbl(con, "tracking_output")
+  if (all(is.numeric(weeks))) {
+    cli::cli_inform(glue::glue("Filtering for week: {weeks}"))
+    x <- x |> filter(week %in% weeks)
+  }
 
-# TODO: create transformations for output
+  x |>
+    standardize_tracking_directions() |>
+    augment_mirror_tracking() |>
+    add_relative_positions()
+}
+
+get_ids_list <- function(df) {
+  plays <- df |>
+    distinct(game_id, play_id, mirrored) |>
+    collect()
+
+  train_ids <- plays |>
+    slice_sample(prop = 0.7)
+
+  non_train_ids <- plays |>
+    anti_join(train_ids)
+
+  val_ids <- non_train_ids |>
+    slice_sample(prop = 0.5)
+
+  test_ids <- non_train_ids |>
+    inner_join(val_ids)
+
+  list(
+    train = train_ids,
+    val = val_ids,
+    test = test_ids
+  )
+}
+
+process_split_data <- function(df, ids) {
+  df |>
+    inner_join(ids)
+}
+
+
+process_data <- function(con, week = NULL) {
+  x <- get_prepped_data(con, week) |> collect()
+  y <- get_prepped_output(con, week) |> collect()
+  ids <- get_ids_list(x)
+
+  purrr::walk(names(ids), function(id) {
+    cli::cli_alert(id)
+
+    # Process data
+    features <- process_split_data(x, ids[[id]])
+    targets <- process_split_data(y, ids[[id]])
+
+    # Validate data alignment with informative error message
+    missing_plays <- nrow(anti_join(
+      features,
+      targets,
+      by = c('game_id', 'play_id', 'mirrored')
+    ))
+
+    if (missing_plays != 0L) {
+      cli::cli_abort("Found {missing_plays} mismatched play(s) in {id}")
+    }
+
+    # Use file.path for cross-platform compatibility
+    output_dir <- "prepped_data"
+    file_name_features <- file.path(output_dir, paste0(id, "_features.parquet"))
+    file_name_targets <- file.path(output_dir, paste0(id, "_targets.parquet"))
+
+    # Write files with progress info
+    cli::cli_alert_info("Writing {nrow(features)} feature rows")
+    arrow::write_parquet(features, file_name_features)
+
+    cli::cli_alert_info("Writing {nrow(targets)} target rows")
+    arrow::write_parquet(targets, file_name_targets)
+  })
+}
