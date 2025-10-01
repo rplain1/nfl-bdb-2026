@@ -206,13 +206,13 @@ get_ids_list <- function(df) {
   )
 }
 
-process_split_data <- function(df, ids) {
+split_data <- function(df, ids) {
   df |>
     inner_join(ids)
 }
 
 
-process_data <- function(con, week = NULL) {
+prep_data <- function(con, week = NULL) {
   x <- get_prepped_data(con, week) |> collect()
   y <- get_prepped_output(con, week) |> collect()
   ids <- get_ids_list(x)
@@ -221,8 +221,8 @@ process_data <- function(con, week = NULL) {
     cli::cli_alert(id)
 
     # Process data
-    features <- process_split_data(x, ids[[id]])
-    targets <- process_split_data(y, ids[[id]])
+    features <- split_data(x, ids[[id]])
+    targets <- split_data(y, ids[[id]])
 
     # Validate data alignment with informative error message
     missing_plays <- nrow(anti_join(
