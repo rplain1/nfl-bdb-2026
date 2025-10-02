@@ -1,8 +1,6 @@
 library(torch)
 library(tidyverse)
 
-df <- arrow::read_parquet('prepped_data/train_features.parquet')
-df_tar <- arrow::read_parquet('prepped_data/train_targets.parquet')
 
 bdb2026_dataset <- torch::dataset(
   name = "bdb2026_dataset",
