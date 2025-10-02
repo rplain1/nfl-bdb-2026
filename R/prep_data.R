@@ -75,7 +75,8 @@ load_raw_data <- function(con) {
       "
         drop table if exists tracking_output;
         create table tracking_output as
-        select t.*, s.week, s.distance_to_goal, ti.play_direction from read_csv('data/train/output_*.csv', quote='\"') t
+        select t.*, s.week, s.distance_to_goal, ti.play_direction
+        from read_csv('data/train/output_*.csv', quote='\"') t
         left join (select distinct game_id, play_id, week, distance_to_goal from supplementary_data) s on t.game_id = s.game_id and t.play_id = s.play_id
         left join (select distinct game_id, play_id, play_direction from tracking_input) ti on t.game_id = t.game_id and ti.play_id = t.play_id
         "
@@ -143,11 +144,17 @@ augment_mirror_tracking <- function(.data) {
 }
 
 add_relative_positions <- function(.data) {
-  .data |>
+  .data <- .data |>
     mutate(
       x_rel = x - (100 - distance_to_goal),
-      ball_land_x_rel = x - (100 - distance_to_goal)
     )
+
+  if (all("ball_land_x") %in% names(.data)) {
+    .data <- .data |>
+      mutate(
+        ball_land_x_rel = ball_land_x_rel - (100 - distance_to_goal)
+      )
+  }
 }
 
 get_prepped_data <- function(con, weeks = NULL) {
