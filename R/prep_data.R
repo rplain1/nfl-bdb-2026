@@ -14,7 +14,6 @@ get_supplementary_data <- function() {
       )
     )
 }
-get_supplementary_data()
 
 
 get_player_data <- function() {
@@ -39,7 +38,6 @@ get_player_data <- function() {
     )
 }
 
-get_player_data()
 
 load_raw_data <- function(con) {
   cli::cli_alert_info("Loading raw data to duckdb")
@@ -114,7 +112,17 @@ standardize_tracking_directions <- function(.data) {
         vx = ifelse(play_direction == 'right', vx, -1 * vx),
         vy = ifelse(play_direction == 'right', vy, -1 * vy),
         ox = ifelse(play_direction == 'right', ox, -1 * ox),
-        oy = ifelse(play_direction == 'right', oy, -1 * oy)
+        oy = ifelse(play_direction == 'right', oy, -1 * oy),
+        ball_land_x = ifelse(
+          play_direction == 'right',
+          ball_land_x,
+          120 - ball_land_x
+        ),
+        ball_land_y = ifelse(
+          play_direction == 'right',
+          ball_land_y,
+          53.3 - ball_land_y
+        )
       )
   }
 
@@ -134,6 +142,7 @@ augment_mirror_tracking <- function(.data) {
       mutate(
         vy = -1 * vy, # Reverse vy
         oy = -1 * oy, # Reverse oy
+        ball_land_y = -1 * ball_land_y
       )
   }
 
@@ -149,12 +158,13 @@ add_relative_positions <- function(.data) {
       x_rel = x - (100 - distance_to_goal),
     )
 
-  if (all("ball_land_x") %in% names(.data)) {
+  if (all("ball_land_x" %in% colnames(.data))) {
     .data <- .data |>
       mutate(
-        ball_land_x_rel = ball_land_x_rel - (100 - distance_to_goal)
+        ball_land_x_rel = ball_land_x - (100 - distance_to_goal)
       )
   }
+  .data
 }
 
 get_prepped_data <- function(con, weeks = NULL) {
@@ -220,8 +230,22 @@ split_data <- function(df, ids) {
 
 
 prep_data <- function(con, week = NULL) {
-  x <- get_prepped_data(con, week) |> collect()
-  y <- get_prepped_output(con, week) |> collect()
+  x <- get_prepped_data(con, week) |>
+    collect() |>
+    group_by(game_id, play_id) |>
+    mutate(min_frame = min(frame_id)) |>
+    ungroup() |>
+    mutate(
+      frame_id = 1 + (frame_id - min_frame)
+    )
+  y <- get_prepped_output(con, week) |>
+    collect() |>
+    group_by(game_id, play_id) |>
+    mutate(min_frame = min(frame_id)) |>
+    ungroup() |>
+    mutate(
+      frame_id = 1 + (frame_id - min_frame)
+    )
   ids <- get_ids_list(x)
 
   purrr::walk(names(ids), function(id) {
