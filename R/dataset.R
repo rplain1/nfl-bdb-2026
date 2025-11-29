@@ -2,39 +2,13 @@ library(torch)
 library(tidyverse)
 
 
-bdb2026_dataset <- torch::dataset(
-  name = "bdb2026_dataset",
-  initialize = function(features, targets) {
-    self$features <- features
-    self$targets <- targets
-    self$keys <- unique(features[, c(
-      'game_id',
-      'play_id',
-      'nfl_id',
-      'mirrored'
-    )])
-    self$max_players <- 17
-  },
-  .length = function() {
-    nrow(self$keys)
-  },
-  .getitem = function(i) {
-    X <- self$features |>
-      inner_join(self$keys[i, ])
-    y <- self$features |>
-      inner_join(self$keys[i, ])
-  }
-)
-
-
 bdb2026_dataset <- dataset(
   name = "bdb2026_dataset",
-  initialize = function(features, targets, max_players = 22, num_features = 6) {
+  initialize = function(features, targets, max_players = 22, num_features = 8) {
     self$features <- features
     self$targets <- targets
     self$keys <- unique(features[, c("game_id", "play_id", "mirrored")])
 
-    # Pre-compute these to avoid repeated calculations
     self$max_frames <- max(features$frame_id)
     self$max_players <- max_players
     self$num_features <- num_features
@@ -51,7 +25,19 @@ bdb2026_dataset <- dataset(
     play_df <- self$features %>%
       inner_join(key, by = c("game_id", "play_id", "mirrored")) %>%
       arrange(nfl_id, frame_id) %>%
-      select(nfl_id, player_to_predict, frame_id, x = x_rel, y, vx, vy, ox, oy)
+      select(
+        nfl_id,
+        player_to_predict,
+        frame_id,
+        x = x_rel,
+        y,
+        vx,
+        vy,
+        ox,
+        oy,
+        ball_land_x = ball_land_x_rel,
+        ball_land_y
+      )
 
     # Get unique sorted IDs for consistent ordering
     unique_players <- sort(unique(play_df$nfl_id))
@@ -75,7 +61,7 @@ bdb2026_dataset <- dataset(
       player_idx <- which(unique_players == play_df$nfl_id[j])
       feature_array[frame_idx, player_idx, ] <- as.numeric(play_df[
         j,
-        c("x", "y", "vx", "vy", "ox", "oy")
+        c("x", "y", "vx", "vy", "ox", "oy", "ball_land_x", "ball_land_y")
       ])
     }
 
@@ -96,7 +82,6 @@ bdb2026_dataset <- dataset(
     player_mask <- torch_zeros(self$max_players, dtype = torch_bool())
     player_mask[1:num_players] <- TRUE
 
-    # NEW: Target mask - which players have valid targets
     target_mask <- torch_zeros(self$max_players, dtype = torch_bool())
     for (p in players_to_predict) {
       player_idx <- which(unique_players == p)
@@ -128,16 +113,12 @@ bdb2026_dataset <- dataset(
     padded_target <- torch_zeros(c(self$max_frames, self$max_players, 2))
     padded_target[1:num_frames, 1:num_players, ] <- target_tensor
 
-    # Return list
     list(
-      x = padded_tensor, # [max_frames, max_players, num_features]
-      y = padded_target, # [max_frames, max_players, 2]
-      frame_mask = frame_mask, # [max_frames] - which frames are real
-      player_mask = player_mask, # [max_players] - which players exist
-      target_mask = target_mask, # [max_players] - which players have targets
-      game_id = key$game_id, # Single numeric value
-      play_id = key$play_id, # Single numeric value
-      mirrored = key$mirrored # Single logical value
+      x = padded_tensor,
+      y = padded_target,
+      frame_mask = frame_mask,
+      player_mask = player_mask,
+      target_mask = target_mask
     )
   }
 )
@@ -168,4 +149,32 @@ test_it <- function() {
     sample$frame_mask$sum()$item(),
     length(unique(sample_df$frame_id))
   )
+}
+
+
+create_dataloaders <- function(
+  max_players = 17,
+  output_dir = 'datasets',
+  input_dir = 'prepped_data'
+) {
+  cli::cli_h3("Creating dataloader objects")
+  purrr::walk(c('train', 'val', 'test'), function(dataset) {
+    cli::cli_alert_info("Creating {dataset} dataloader")
+    df <- arrow::read_parquet(
+      glue::glue('{input_dir}/{dataset}_features.parquet')
+    )
+    df_tar <- arrow::read_parquet(
+      glue::glue('{input_dir}/{dataset}_targets.parquet')
+    )
+    cli::cli_alert_info("{dataset} features dimensions: {dim(df)}.")
+    cli::cli_alert_info("{dataset} targets dimensions: {dim(df_tar)}.")
+
+    .ds <- bdb2026_dataset(df, df_tar, max_players = max_players)
+
+    torch::torch_save(.ds, glue::glue('{output_dir}/{dataset}_ds.pt'))
+    cli::cli_alert_info(
+      "{dataset} dataloader written to {output_dir}/{dataset}.pt"
+    )
+  })
+  cli::cli_alert_success("All datasets created!")
 }
