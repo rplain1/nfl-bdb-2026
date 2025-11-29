@@ -60,13 +60,13 @@ plot_df <- df$x |>
 
 watch_film <- function(plot_df, play) {
   d <- plot_df |>
-    mutate(x_rel = x_rel + 15) |>
+    mutate(x_rel = x_rel + 15, ball_land_x_rel = ball_land_x_rel + 15) |>
     inner_join(play) |>
     mutate(
       cols_fill = if_else(is.na(team_color), "#663300", team_color),
       cols_col = if_else(is.na(team_color), "#663300", team_color2),
       size_vals = if_else(is.na(team_color), 4, 6),
-      shape_vals = if_else(is.na(team_color), 16, 22)
+      shape_vals = if_else(player_side == 'Offense', 21, 22)
     )
 
   plot_title <- d$play_description |> str_sub(8, 60)
@@ -75,7 +75,7 @@ watch_film <- function(plot_df, play) {
   anim <- ggplot() +
     gg_field(
       yardmin = 10,
-      yardmax = 50,
+      yardmax = 80,
       field_color = "white",
       line_color = "black",
       sideline_color = 'white',
@@ -109,6 +109,13 @@ watch_film <- function(plot_df, play) {
       vjust = 0.36,
       size = 3.5
     ) +
+    geom_point(
+      aes(x = ball_land_x_rel, y = ball_land_y),
+      size = 2,
+      shape = 2,
+      color = 'red',
+      data = d
+    ) +
     scale_size_identity(guide = FALSE) +
     scale_shape_identity(guide = FALSE) +
     scale_fill_identity(guide = FALSE) +
@@ -120,7 +127,7 @@ watch_film <- function(plot_df, play) {
 
   anim_save(
     glue::glue("plays/{unique(plot_title)}.gif"),
-    animate(anim, width = 720, height = 440, fps = 10, nframe = nFrames)
+    animate(anim, width = 720, height = 440, fps = 5, nframe = nFrames)
   )
 }
 
