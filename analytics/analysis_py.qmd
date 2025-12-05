@@ -224,163 +224,149 @@ Okay! so player_to_predict only appears in the X dataset.  I could filter combin
 
 ```{python}
 
-df_combined_tracking = pl.scan_parquet('analytics/prepped_data/combined_tracking.parquet')
-
-players_to_predict = df_combined_tracking.with_columns(keep_y = pl.col('player_to_predict').max().over(['game_id', 'play_id', 'nfl_id'])).filter(pl.col('keep_y') == True)
-
-
-
-
-tmp = (
-    df_combined_tracking.filter(
-        pl.col("player_position").is_in(["WR", "TE", "RB"]),
-    )
-    .join(
-        df_assignments.lazy().select(
-            [
-                "game_id",
-                "play_id",
-                "frame_id",
-                "nfl_id",
-                "nfl_id_def",
-                "pred_coverage",
-            ]
-        ),
-        on=["game_id", "play_id", "nfl_id", "frame_id"],
-        how="full",
-    )
-    .join(play.lazy(), on=["game_id", "play_id"])
-    .collect()
-)
-.with_columns(
-    nfl_id_def=pl.col("nfl_id_def")
-    .fill_null(strategy="forward")
-    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
-).with_columns(
-    pred_coverage=pl.col("pred_coverage")
-    .fill_null(strategy="forward")
-    .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
-).group_by(
-    ["nfl_id", "nfl_id_def"]
-).agg(
-    pl.col("frame_id").max()
-).sort('frame_id')
-```
-
-
-
-
-
-
-
-
-
-```{python}
-
 df_combined_tracking = pl.scan_parquet(
     "analytics/prepped_data/combined_tracking.parquet"
 )
 
-(
-    df_combined_tracking.filter(
-        pl.col("player_position").is_in(["WR", "TE", "RB"]),
+players_to_predict = df_combined_tracking.with_columns(
+    keep_y=pl.col("player_to_predict").max().over(["game_id", "play_id", "nfl_id"])
+).filter(pl.col("keep_y") == True)
+
+
+tmp1 = df_combined_tracking.join(
+    df_assignments.lazy().select(
+        [
+            "game_id",
+            "play_id",
+            "frame_id",
+            "nfl_id",
+            "nfl_id_def",
+            "pred_coverage",
+        ]
+    ),
+    on=["game_id", "play_id", "nfl_id", "frame_id"],
+    how="full",
+).join(play.lazy(), on=["game_id", "play_id"])
+
+tmp2 = df_combined_tracking.join(
+    df_assignments.lazy().select(
+        [
+            "game_id",
+            "play_id",
+            "frame_id",
+            "nfl_id",
+            "nfl_id_def",
+            "pred_coverage",
+        ]
+    ),
+    left_on=["game_id", "play_id", "nfl_id", "frame_id"],
+    right_on=["game_id", "play_id", "nfl_id_def", "frame_id"],
+    how="full",
+    suffix="_off",
+).join(play.lazy(), on=["game_id", "play_id"])
+
+tmp1 = tmp1.select(
+    ["frame_id", "play_id", "game_id", "nfl_id", "player_name", "nfl_id_def"]
+).collect()
+
+tmp2 = (
+    tmp2.select(
+        [
+            "frame_id",
+            "play_id",
+            "game_id",
+            "nfl_id",
+            "player_name",
+            "nfl_id_off",
+            "pred_coverage",
+        ]
     )
-    .join(
-        df_assignments.lazy(),
-        on=["game_id", "play_id", "nfl_id", "frame_id"],
-        how="inner",
-    )
+    .filter(pl.col("nfl_id_off").is_not_null())
     .collect()
 )
 
 
-df_assignments.join(play, on=["game_id", "play_id"])
-
-"""
-This gets the fill forward I want. It might be good to take the average of the last 3 frames and fill that forward?
-
-Oh wut, this still isn't getting the right data
-"""
-
-
-df_assignments.join(play, on=["game_id", "play_id"]).select(
-    [
-        "game_id",
-        "play_id",
-        "frame_id",
-        "nfl_id",
-        "player_name",
-        "nfl_id_def",
-        "turn_angle",
-        "pred_coverage",
-    ]
-).with_columns(
-    nfl_id_def=pl.col("nfl_id_def")
-    .fill_null(strategy="forward")
-    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
-).with_columns(
-    pred_coverage=pl.col("pred_coverage")
-    .fill_null(strategy="forward")
-    .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
-).filter(
-    pl.col("player_name") == "Mike Evans"
-).filter(
-    pl.col("nfl_id_def") == 54513  # 55921
+df_model = (
+    tmp2.join(
+        tmp1,
+        left_on=["frame_id", "play_id", "game_id", "nfl_id", "nfl_id_off"],
+        right_on=["frame_id", "play_id", "game_id", "nfl_id_def", "nfl_id"],
+        how="right",
+        suffix="_off",
+    )
+    .filter(pl.col("player_name_off") == "Mike Williams")
+    .with_columns(
+        nfl_id_def=pl.col("nfl_id_def")
+        .fill_null(strategy="forward")
+        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+        player_name=pl.col("player_name")
+        .fill_null(strategy="forward")
+        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+    )
+    .with_columns(
+        nfl_id_def=pl.col("nfl_id_def")
+        .fill_null(strategy="backward")
+        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+        player_name=pl.col("player_name")
+        .fill_null(strategy="backward")
+        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+    )
+    .with_columns(
+        pred_coverage=pl.col("pred_coverage")
+        .fill_null(strategy="forward")
+        .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
+    )
 )
-
-
-### AHHH gotta figure out how to take the assignments and fill the probabilities here....
-
-# .join(
-#     df_combined_tracking.select(
-#         "game_id", "play_id", "frame_id", "nfl_id", "player_name", "turn_angle"
-#     ),
-#     left_on=["game_id", "play_id", "frame_id", "nfl_id_def"],
-#     right_on=["game_id", "play_id", "frame_id", "nfl_id"],
-#     suffix="_def",
-#     how = "left"
-# ).collect()
-
-# df_turn_angle = df_turn_angle.with_columns(
-#     diff_turn_angle = pl.arctan2(
-#         (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
-#         (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
-#     ).round(3)
-# ).with_columns(
-#     diff_turn_angle_coverage = pl.col('diff_turn_angle') * pl.col('pred_coverage')
-# )
 ```
 
 
 ```{python}
+df_model = df_model.lazy().join(
+    df_combined_tracking.select(
+        "game_id", "play_id", "frame_id", "nfl_id", "turn_angle"
+    ),
+    left_on=["game_id", "play_id", "frame_id", "nfl_id"],
+    right_on=["game_id", "play_id", "frame_id", "nfl_id"],
+    how="left",
+).join(
+    df_combined_tracking.select(
+        "game_id", "play_id", "frame_id", "nfl_id", "turn_angle"
+    ),
+    left_on=["game_id", "play_id", "frame_id", "nfl_id_def"],
+    right_on=["game_id", "play_id", "frame_id", "nfl_id"],
+    suffix="_def",
+    how="left",
+).collect().with_columns(
+    diff_turn_angle = pl.arctan2(
+        (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
+        (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
+    ).round(3)
+).with_columns(
+    diff_turn_angle_coverage = pl.col('diff_turn_angle') * pl.col('pred_coverage')
+)
+```
 
-play_starts = get_play_starts(create_plot_df(df, play))
 
-player_df = create_plot_df(df_turn_angle, play).filter(pl.col('player_name') == 'Mike Evans').filter(pl.col('frame_id') > 8)
 
+
+```{python}
 (
-    ggplot(data=player_df, mapping=aes(x="frame_id"))
-    + geom_line(aes(y="diff_turn_angle"), color="black", alpha = 0.7)
-    # + geom_line(
-    #     aes(
-    #         y="diff_turn_angle_coverage",
-    #     ),
-    #     color="red", alpha = 0.7
-    # )
-    + facet_wrap(["player_name_def"])
-)
-```
-
-
-```{python}
-create_plot_df(df_turn_angle, play)
-```
-
-
-
-
-```{python}
-tmp = create_plot_df(df, play).filter(
-    pl.col("player_name").is_in(["Mike Evans", "Tyrique Stevenson"])
+    ggplot(
+        df_model.select(
+            [
+                "frame_id",
+                "player_name",
+                "turn_angle",
+                "turn_angle_def",
+                "diff_turn_angle",
+                "diff_turn_angle_coverage",
+                # "pred_coverage",
+            ]
+        ).unpivot(index=["frame_id", "player_name"]),
+        aes("frame_id", "value", color="variable"),
+    )
+    + geom_line()
+    + facet_wrap("player_name", ncol=1)
+    + scale_color_manual(values=['blue', 'red', 'grey', 'grey'])
 )
 ```
