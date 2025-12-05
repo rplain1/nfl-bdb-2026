@@ -50,7 +50,7 @@ def create_distance_data(df):
         .filter(
             pl.all_horizontal(
                 pl.col("player_side") == "Offense",
-                # pl.col("dataset") == "X",
+                pl.col("dataset") == "X",
                 pl.col("player_position").is_in(["WR", "TE", "RB"]),
                 pl.col("frame_id") > pl.col("frame_start"),
             )
@@ -62,7 +62,7 @@ def create_distance_data(df):
         df.filter(
             pl.all_horizontal(
                 pl.col("player_side") == "Defense",
-                # pl.col("dataset") == "X",
+                pl.col("dataset") == "X",
                 pl.col("player_position").is_in(
                     ["CB", "S", "SS", "ILB", "FS", "LB", "OLB"]
                 ),
@@ -142,7 +142,6 @@ def create_gmm_model_data(df_distances):
                 "delta_y",
                 "velocity_alignment",
                 "relative_speed",
-                "is_closest_defender",
             ]
         )
         .drop_nulls()
@@ -189,13 +188,8 @@ def create_coverage_assignment_probs(df_model):
             )
             .then(pl.lit(1))
             .otherwise(pl.col("column_0")),
-            column_1=pl.when(
-                pl.col("nfl_id_def").n_unique().over(["game_id", "play_id", "nfl_id"])
-                == 1
-            )
-            .then(pl.lit(0))
-            .otherwise(pl.col("column_1")),
         )
+        .with_columns(column_1=pl.lit(1) - pl.col("column_0"))
     )
 
 
