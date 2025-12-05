@@ -47,7 +47,7 @@ def create_tracking_plot(df, play):
     plot_df = create_plot_df(df, play)
     return (
         ggplot(data=plot_df, mapping=aes(x="x", y="y", color="dataset"))
-        + geom_point()
+        + geom_point(aes(alpha="frame_id"))
         + geom_text(
             data=plot_df.filter(pl.col("frame_id") == pl.col("frame_id").min()),
             mapping=aes(x="x", y="y", label="player_name"),
@@ -130,11 +130,11 @@ create_player_prob_plot(chase_claypool)
 ## Marvin Jones 2X
 
 ```{python}
-play = pl.DataFrame({"game_id": 2023090700, "play_id": 101})
-josh_reynolds = create_player_df(create_plot_df(df_preds, play), "Josh Reynolds")
+play = pl.DataFrame({"game_id": 2023090700, "play_id": 361})
+marvin_jones = create_player_df(create_plot_df(df_preds, play), "Marvin Jones")
 
 create_tracking_plot(df, play)
-create_player_prob_plot(josh_reynolds)
+create_player_prob_plot(marvin_jones)
 ```
 
 
@@ -166,6 +166,30 @@ create_player_prob_plot(big_mike)
 ```
 
 
+## Jonathan Mingo
+
+```{python}
+play = pl.DataFrame({"game_id": 2023091800, "play_id": 2500})
+
+jonathan_mingo = create_player_df(create_plot_df(df_preds, play), "Jonathan Mingo")
+
+create_tracking_plot(df, play)
+create_player_prob_plot(jonathan_mingo)
+
+```
+
+
+
+```{python}
+play = pl.DataFrame({"game_id": 2023091710, "play_id": 3659})
+
+garrett_wilson = create_player_df(create_plot_df(df_preds, play), "Garrett Wilson")
+
+create_tracking_plot(df, play)
+create_player_prob_plot(garrett_wilson)
+
+```
+
 ## Joining together
 
 
@@ -179,13 +203,76 @@ df_assignments = (
     df_preds.with_columns(
         is_coverage_assigned=pl.col("column_1").max().over(grouping_cols)
     )
-    .filter(pl.col("is_coverage_assigned") > 0.5)
-    .select(grouping_cols + ["frame_id", pl.col("column_1").alias("pred_coverage")])
-    .collect()
+    # .filter(pl.col("is_coverage_assigned") > 0.5)
+    .select(grouping_cols + ["frame_id", pl.col("column_0").alias("pred_coverage")])
 )
 
-df_assignments.write_parquet('analytics/model_data/coverage_assignments_filtered.parquet')
 ```
+
+
+Steps
+
+- take the assignment data and join what?
+
+combined tracking: long, player level
+assignment: wider, receiver/defender level
+
+I can left join combined tracking offense, and then join combined tracking defense.
+- this will still only give me the X dataset plays.
+
+Okay! so player_to_predict only appears in the X dataset.  I could filter combined tracking to where player_to_preict max over nfl_id, game_id, play_id is True.
+
+```{python}
+
+df_combined_tracking = pl.scan_parquet('analytics/prepped_data/combined_tracking.parquet')
+
+players_to_predict = df_combined_tracking.with_columns(keep_y = pl.col('player_to_predict').max().over(['game_id', 'play_id', 'nfl_id'])).filter(pl.col('keep_y') == True)
+
+
+
+
+tmp = (
+    df_combined_tracking.filter(
+        pl.col("player_position").is_in(["WR", "TE", "RB"]),
+    )
+    .join(
+        df_assignments.lazy().select(
+            [
+                "game_id",
+                "play_id",
+                "frame_id",
+                "nfl_id",
+                "nfl_id_def",
+                "pred_coverage",
+            ]
+        ),
+        on=["game_id", "play_id", "nfl_id", "frame_id"],
+        how="full",
+    )
+    .join(play.lazy(), on=["game_id", "play_id"])
+    .collect()
+)
+.with_columns(
+    nfl_id_def=pl.col("nfl_id_def")
+    .fill_null(strategy="forward")
+    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+).with_columns(
+    pred_coverage=pl.col("pred_coverage")
+    .fill_null(strategy="forward")
+    .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
+).group_by(
+    ["nfl_id", "nfl_id_def"]
+).agg(
+    pl.col("frame_id").max()
+).sort('frame_id')
+```
+
+
+
+
+
+
+
 
 
 ```{python}
@@ -194,51 +281,99 @@ df_combined_tracking = pl.scan_parquet(
     "analytics/prepped_data/combined_tracking.parquet"
 )
 
-df_assignments = pl.scan_parquet(
-    "analytics/model_data/coverage_assignments_filtered.parquet"
+(
+    df_combined_tracking.filter(
+        pl.col("player_position").is_in(["WR", "TE", "RB"]),
+    )
+    .join(
+        df_assignments.lazy(),
+        on=["game_id", "play_id", "nfl_id", "frame_id"],
+        how="inner",
+    )
+    .collect()
 )
 
-df_turn_angle = df_combined_tracking.filter(
-    pl.col("player_position").is_in(["WR", "TE", "RB"]),
-).join(
-    df_assignments,
-    on=["game_id", "play_id", "nfl_id", "frame_id"],
-    how="inner",
-).join(
-    df_combined_tracking.select(
-        "game_id", "play_id", "frame_id", "nfl_id", "player_name", "turn_angle"
-    ),
-    left_on=["game_id", "play_id", "frame_id", "nfl_id_def"],
-    right_on=["game_id", "play_id", "frame_id", "nfl_id"],
-    suffix="_def",
-).collect()
 
-df_turn_angle = df_turn_angle.with_columns(
-    diff_turn_angle = pl.arctan2(
-        (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
-        (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
-    ).round(3)
+df_assignments.join(play, on=["game_id", "play_id"])
+
+"""
+This gets the fill forward I want. It might be good to take the average of the last 3 frames and fill that forward?
+
+Oh wut, this still isn't getting the right data
+"""
+
+
+df_assignments.join(play, on=["game_id", "play_id"]).select(
+    [
+        "game_id",
+        "play_id",
+        "frame_id",
+        "nfl_id",
+        "player_name",
+        "nfl_id_def",
+        "turn_angle",
+        "pred_coverage",
+    ]
 ).with_columns(
-    diff_turn_angle_coverage = pl.col('diff_turn_angle') * pl.col('pred_coverage')
+    nfl_id_def=pl.col("nfl_id_def")
+    .fill_null(strategy="forward")
+    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+).with_columns(
+    pred_coverage=pl.col("pred_coverage")
+    .fill_null(strategy="forward")
+    .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
+).filter(
+    pl.col("player_name") == "Mike Evans"
+).filter(
+    pl.col("nfl_id_def") == 54513  # 55921
+)
+
+
+### AHHH gotta figure out how to take the assignments and fill the probabilities here....
+
+# .join(
+#     df_combined_tracking.select(
+#         "game_id", "play_id", "frame_id", "nfl_id", "player_name", "turn_angle"
+#     ),
+#     left_on=["game_id", "play_id", "frame_id", "nfl_id_def"],
+#     right_on=["game_id", "play_id", "frame_id", "nfl_id"],
+#     suffix="_def",
+#     how = "left"
+# ).collect()
+
+# df_turn_angle = df_turn_angle.with_columns(
+#     diff_turn_angle = pl.arctan2(
+#         (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
+#         (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
+#     ).round(3)
+# ).with_columns(
+#     diff_turn_angle_coverage = pl.col('diff_turn_angle') * pl.col('pred_coverage')
+# )
+```
+
+
+```{python}
+
+play_starts = get_play_starts(create_plot_df(df, play))
+
+player_df = create_plot_df(df_turn_angle, play).filter(pl.col('player_name') == 'Mike Evans').filter(pl.col('frame_id') > 8)
+
+(
+    ggplot(data=player_df, mapping=aes(x="frame_id"))
+    + geom_line(aes(y="diff_turn_angle"), color="black", alpha = 0.7)
+    # + geom_line(
+    #     aes(
+    #         y="diff_turn_angle_coverage",
+    #     ),
+    #     color="red", alpha = 0.7
+    # )
+    + facet_wrap(["player_name_def"])
 )
 ```
 
 
 ```{python}
-player_df = create_plot_df(df_turn_angle, play).filter(pl.col('player_name') == 'Mike Evans')
-
-(
-    ggplot(data=player_df, mapping=aes(x="frame_id"))
-    + geom_line(aes(y="diff_turn_angle"), color="blue")
-    + geom_line(
-        aes(
-            y="diff_turn_angle_coverage
-            ",
-        ),
-        color="red",
-    )
-    + facet_wrap(["player_name_def"])
-)
+create_plot_df(df_turn_angle, play)
 ```
 
 
