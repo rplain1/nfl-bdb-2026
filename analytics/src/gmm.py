@@ -50,9 +50,9 @@ def create_distance_data(df):
         .filter(
             pl.all_horizontal(
                 pl.col("player_side") == "Offense",
-                pl.col("dataset") == "X",
+                # pl.col("dataset") == "X",
                 pl.col("player_position").is_in(["WR", "TE", "RB"]),
-                # pl.col("frame_id") > pl.col("frame_start"),
+                pl.col("frame_id") > pl.col("frame_start"),
             )
         )
         .select(cols)
@@ -62,7 +62,7 @@ def create_distance_data(df):
         df.filter(
             pl.all_horizontal(
                 pl.col("player_side") == "Defense",
-                pl.col("dataset") == "X",
+                # pl.col("dataset") == "X",
                 pl.col("player_position").is_in(
                     ["CB", "S", "SS", "ILB", "FS", "LB", "OLB"]
                 ),
@@ -97,7 +97,7 @@ def create_gmm_model_data(df_distances):
                 ["game_id", "play_id", "nfl_id", "nfl_id_def"]
             )
         )
-        .filter(pl.col("min_dist") <= 12)
+        .filter(pl.col("min_dist") <= 5)
         .with_columns(y=pl.col("y") - (53.3 / 2), y_def=pl.col("y_def") - (53.3 / 2))
         .sort(by=over_cols + ["frame_id"])
         .with_columns(
@@ -105,6 +105,10 @@ def create_gmm_model_data(df_distances):
             min_dist_last_5=pl.col("distance").rolling_min(5).over(over_cols),
             delta_x=pl.col("x_def") - pl.col("x"),
             delta_y=pl.col("y_def") - pl.col("y"),
+            # vx=pl.col("x").diff().over(over_cols, order_by="frame_id") / 0.1,
+            # vy=pl.col("y").diff().over(over_cols, order_by="frame_id") / 0.1,
+            # vx_def=pl.col("x_def").diff().over(over_cols, order_by="frame_id") / 0.1,
+            # vy_def=pl.col("y_def").diff().over(over_cols, order_by="frame_id") / 0.1,
             mag_receiver=(pl.col("vx") ** 2 + pl.col("vy") ** 2).sqrt(),
             mag_defender=(pl.col("vx_def") ** 2 + pl.col("vy_def") ** 2).sqrt(),
             dot_prod=pl.col("vx") * pl.col("vx_def") + pl.col("vy") * pl.col("vy_def"),
@@ -138,6 +142,7 @@ def create_gmm_model_data(df_distances):
                 "delta_y",
                 "velocity_alignment",
                 "relative_speed",
+                "is_closest_defender",
             ]
         )
         .drop_nulls()
@@ -176,6 +181,20 @@ def create_coverage_assignment_probs(df_model):
             left_on=["nfl_id_def"],
             right_on="nfl_id",
             suffix="_def",
+        )
+        .with_columns(
+            column_0=pl.when(
+                pl.col("nfl_id_def").n_unique().over(["game_id", "play_id", "nfl_id"])
+                == 1
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.col("column_0")),
+            column_1=pl.when(
+                pl.col("nfl_id_def").n_unique().over(["game_id", "play_id", "nfl_id"])
+                == 1
+            )
+            .then(pl.lit(0))
+            .otherwise(pl.col("column_1")),
         )
     )
 
