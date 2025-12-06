@@ -132,6 +132,8 @@ def join_tracking_data():
 
 
 def add_tracking_features(tracking_df):
+    over_cols = ["game_id", "play_id", "nfl_id"]
+
     return (
         tracking_df.sort(["game_id", "play_id", "nfl_id", "dataset", "frame_id"])
         .with_columns(
@@ -140,18 +142,8 @@ def add_tracking_features(tracking_df):
             )
         )
         .with_columns(
-            dx=pl.col("x")
-            - (
-                pl.col("x")
-                .shift(1)
-                .over(["game_id", "play_id", "nfl_id"], order_by="frame_id")
-            ),
-            dy=pl.col("y")
-            - (
-                pl.col("y")
-                .shift(1)
-                .over(["game_id", "play_id", "nfl_id"], order_by="frame_id")
-            ),
+            dx=pl.col("x").diff().over(over_cols, order_by="frame_id") / 0.1,
+            dy=pl.col("y").diff().over(over_cols, order_by="frame_id") / 0.1,
         )
         .with_columns(s=(pl.col("dx") ** 2 + pl.col("dy") ** 2).sqrt())
         .with_columns(s_mph=pl.col("s") * (3600 / 1760))
@@ -160,15 +152,11 @@ def add_tracking_features(tracking_df):
                 pl.arctan2(
                     pl.col("y")
                     .shift(-1)
-                    .over(
-                        ["game_id", "play_id", "nfl_id", "dataset"], order_by="frame_id"
-                    )
+                    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id")
                     - pl.col("y"),
                     pl.col("x")
                     .shift(-1)
-                    .over(
-                        ["game_id", "play_id", "nfl_id", "dataset"], order_by="frame_id"
-                    )
+                    .over(["game_id", "play_id", "nfl_id"], order_by="frame_id")
                     - pl.col("x"),
                 )
                 - pl.arctan2(

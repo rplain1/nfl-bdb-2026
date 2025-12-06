@@ -127,6 +127,17 @@ create_player_prob_plot(chase_claypool)
 
 ```
 
+
+```{python}
+play = pl.DataFrame({"game_id": 2023091706, "play_id": 3512})
+
+cole_kmet = create_player_df(create_plot_df(df_preds, play), "Cole Kmet")
+
+create_tracking_plot(df, play)
+create_player_prob_plot(cole_kmet)
+```
+
+
 ## Marvin Jones 2X
 
 ```{python}
@@ -136,6 +147,10 @@ marvin_jones = create_player_df(create_plot_df(df_preds, play), "Marvin Jones")
 create_tracking_plot(df, play)
 create_player_prob_plot(marvin_jones)
 ```
+
+
+
+
 
 
 ## Josh Downs - Goal Line
@@ -200,27 +215,14 @@ df_preds.head().collect().glimpse()
 grouping_cols = ["game_id", "play_id", "nfl_id", "nfl_id_def"]
 
 df_assignments = (
-    df_preds.with_columns(
-        is_coverage_assigned=pl.col("column_1").max().over(grouping_cols)
-    )
-    # .filter(pl.col("is_coverage_assigned") > 0.5)
+    df_preds
     .select(grouping_cols + ["frame_id", pl.col("column_0").alias("pred_coverage")])
 )
 
 ```
 
 
-Steps
-
-- take the assignment data and join what?
-
-combined tracking: long, player level
-assignment: wider, receiver/defender level
-
-I can left join combined tracking offense, and then join combined tracking defense.
-- this will still only give me the X dataset plays.
-
-Okay! so player_to_predict only appears in the X dataset.  I could filter combined tracking to where player_to_preict max over nfl_id, game_id, play_id is True.
+Turn angle def isn't joining to anything in the early frames
 
 ```{python}
 
@@ -228,145 +230,153 @@ df_combined_tracking = pl.scan_parquet(
     "analytics/prepped_data/combined_tracking.parquet"
 )
 
-players_to_predict = df_combined_tracking.with_columns(
-    keep_y=pl.col("player_to_predict").max().over(["game_id", "play_id", "nfl_id"])
-).filter(pl.col("keep_y") == True)
 
-
-tmp1 = df_combined_tracking.join(
-    df_assignments.lazy().select(
-        [
-            "game_id",
-            "play_id",
-            "frame_id",
-            "nfl_id",
-            "nfl_id_def",
-            "pred_coverage",
-        ]
-    ),
-    on=["game_id", "play_id", "nfl_id", "frame_id"],
-    how="full",
-).join(play.lazy(), on=["game_id", "play_id"])
-
-tmp2 = df_combined_tracking.join(
-    df_assignments.lazy().select(
-        [
-            "game_id",
-            "play_id",
-            "frame_id",
-            "nfl_id",
-            "nfl_id_def",
-            "pred_coverage",
-        ]
-    ),
-    left_on=["game_id", "play_id", "nfl_id", "frame_id"],
-    right_on=["game_id", "play_id", "nfl_id_def", "frame_id"],
-    how="full",
-    suffix="_off",
-).join(play.lazy(), on=["game_id", "play_id"])
-
-tmp1 = tmp1.select(
-    ["frame_id", "play_id", "game_id", "nfl_id", "player_name", "nfl_id_def"]
-).collect()
-
-tmp2 = (
-    tmp2.select(
-        [
-            "frame_id",
-            "play_id",
-            "game_id",
-            "nfl_id",
-            "player_name",
-            "nfl_id_off",
-            "pred_coverage",
-        ]
+players = (
+    df_combined_tracking.filter(
+        pl.col("player_position").is_in(
+            ["WR", "CB", "S", "SS", "ILB", "FS", "LB", "OLB", "MLB"]
+        )
     )
-    .filter(pl.col("nfl_id_off").is_not_null())
-    .collect()
+    .select(["game_id", "play_id", "frame_id", "nfl_id", "player_name", "player_side"])
+    .unique()
+)
+
+pairs = players.join(
+    players, on=["game_id", "play_id", "frame_id"], how="inner", suffix="_def"
+).filter(
+    pl.all_horizontal(pl.col("player_side") != "Defense"),
+    pl.col("player_side") != pl.col("player_side_def"),
 )
 
 
-df_model = (
-    tmp2.join(
-        tmp1,
-        left_on=["frame_id", "play_id", "game_id", "nfl_id", "nfl_id_off"],
-        right_on=["frame_id", "play_id", "game_id", "nfl_id_def", "nfl_id"],
-        how="right",
-        suffix="_off",
+df_model_stg = (
+    pairs#.join(play.lazy(), on=["game_id", "play_id"])
+    .join(
+        df_assignments.select(
+            ["game_id", "play_id", "frame_id", "nfl_id", "nfl_id_def", "pred_coverage"]
+        ),
+        left_on=["game_id", "play_id", "frame_id", "nfl_id", "nfl_id_def"],
+        right_on=["game_id", "play_id", "frame_id", "nfl_id", "nfl_id_def"],
+        how="left",
     )
-    .filter(pl.col("player_name_off") == "Mike Williams")
-    .with_columns(
-        nfl_id_def=pl.col("nfl_id_def")
-        .fill_null(strategy="forward")
-        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
-        player_name=pl.col("player_name")
-        .fill_null(strategy="forward")
-        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
+    .filter(
+        pl.col("pred_coverage")
+        .max()
+        .over(["game_id", "play_id", "nfl_id", "nfl_id_def"])
+        > 0.1
     )
-    .with_columns(
-        nfl_id_def=pl.col("nfl_id_def")
-        .fill_null(strategy="backward")
-        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
-        player_name=pl.col("player_name")
-        .fill_null(strategy="backward")
-        .over(["game_id", "play_id", "nfl_id"], order_by="frame_id"),
-    )
+    .sort(["game_id", "play_id", "player_name", "nfl_id", "frame_id"])
     .with_columns(
         pred_coverage=pl.col("pred_coverage")
         .fill_null(strategy="forward")
         .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
     )
+    .with_columns(
+        pred_coverage=pl.col("pred_coverage")
+        .rolling_mean(2)
+        .over(["game_id", "play_id", "nfl_id", "nfl_id_def"], order_by="frame_id")
+    )
+    .with_columns(pred_coverage=pl.col("pred_coverage").fill_null(value=0))
 )
+
+
+tracking_cols = [
+    "game_id",
+    "play_id",
+    "frame_id",
+    "nfl_id",
+    "x",
+    "y",
+    "turn_angle",
+    "prev_angle",
+    "vx",
+    "vy",
+]
+
+over_cols = ["game_id", "play_id", "nfl_id", "nfl_id_def"]
+
+
+df_model = (
+    df_model_stg.join(
+        df_combined_tracking.select(tracking_cols),
+        on=["game_id", "play_id", "nfl_id", "frame_id"],
+    )
+    .join(
+        df_combined_tracking.select(tracking_cols),
+        left_on=["game_id", "play_id", "nfl_id_def", "frame_id"],
+        right_on=["game_id", "play_id", "nfl_id", "frame_id"],
+        suffix="_def",
+    )
+    .with_columns(
+        vx=pl.col("x").diff().over(over_cols, order_by="frame_id") / 0.1,
+        vy=pl.col("y").diff().over(over_cols, order_by="frame_id") / 0.1,
+        vx_def=pl.col("x_def").diff().over(over_cols, order_by="frame_id") / 0.1,
+        vy_def=pl.col("y_def").diff().over(over_cols, order_by="frame_id") / 0.1,
+    )
+    .with_columns(
+        diff_turn_angle=pl.arctan2(
+            (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
+            (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
+        )
+        .over(over_cols, order_by="frame_id")
+        .round(3)
+    )
+    .with_columns(
+        diff_turn_angle_coverage=pl.col("diff_turn_angle") * pl.col("pred_coverage")
+    )
+    .collect()
+)
+
+
 ```
 
 
 ```{python}
-df_model = df_model.lazy().join(
-    df_combined_tracking.select(
-        "game_id", "play_id", "frame_id", "nfl_id", "turn_angle"
-    ),
-    left_on=["game_id", "play_id", "frame_id", "nfl_id"],
-    right_on=["game_id", "play_id", "frame_id", "nfl_id"],
-    how="left",
-).join(
-    df_combined_tracking.select(
-        "game_id", "play_id", "frame_id", "nfl_id", "turn_angle"
-    ),
-    left_on=["game_id", "play_id", "frame_id", "nfl_id_def"],
-    right_on=["game_id", "play_id", "frame_id", "nfl_id"],
-    suffix="_def",
-    how="left",
-).collect().with_columns(
-    diff_turn_angle = pl.arctan2(
-        (pl.col("turn_angle") - pl.col("turn_angle_def")).sin(),
-        (pl.col("turn_angle") - pl.col("turn_angle_def")).cos(),
-    ).round(3)
-).with_columns(
-    diff_turn_angle_coverage = pl.col('diff_turn_angle') * pl.col('pred_coverage')
+
+new_play = (
+    df_model.filter(pl.col("diff_turn_angle_coverage").abs() > 1.5)
+    .sample(1)
+    .select(["game_id", "play_id", "player_name", "diff_turn_angle_coverage"])
 )
-```
 
 
+play = pl.DataFrame({"game_id": 2023121400, "play_id": 3746})
+
+create_tracking_plot(df, new_play)
 
 
-```{python}
+pl.scan_csv("data/supplementary_data.csv").select(
+    "game_id",
+    "week",
+    "play_id",
+    "quarter",
+    "down",
+    "play_description",
+    "home_team_abbr",
+    "visitor_team_abbr",
+    "game_clock",
+    "yards_to_go",
+).join(new_play.lazy(), on=["game_id", "play_id"]).collect()
+
 (
     ggplot(
-        df_model.select(
+        df_model.join(new_play, on=["game_id", "play_id", "player_name"])
+        .select(
             [
                 "frame_id",
-                "player_name",
+                "player_name_def",
                 "turn_angle",
                 "turn_angle_def",
                 "diff_turn_angle",
                 "diff_turn_angle_coverage",
                 # "pred_coverage",
             ]
-        ).unpivot(index=["frame_id", "player_name"]),
+        )
+        .unpivot(index=["frame_id", "player_name_def"]),
         aes("frame_id", "value", color="variable"),
     )
     + geom_line()
-    + facet_wrap("player_name", ncol=1)
-    + scale_color_manual(values=['blue', 'red', 'grey', 'grey'])
+    + facet_wrap("player_name_def", ncol=1)
+    + scale_color_manual(values=["blue", "red", "grey", "grey"])
 )
 ```
