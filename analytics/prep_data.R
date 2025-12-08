@@ -254,11 +254,13 @@ prep_data <- function(con, weeks = NULL, load_data = FALSE, return_df = FALSE) {
   clean_df <- join_tracking_data(con, weeks) |>
     add_tracking_features()
 
-  cli::cli_alert_info("Combined tracking data available!")
   if (return_df) {
     clean_df |> as_tibble()
   } else {
     clean_df |>
       compute(name = 'combined_data', overwrite = TRUE, temporary = FALSE)
+    cli::cli_alert_success(
+      "Combined tracking data available in `combined_data`!"
+    )
   }
 }
