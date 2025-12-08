@@ -2,10 +2,13 @@ library(tidyverse)
 library(duckdb)
 source('analytics/prep_data.R')
 source('analytics/distance_data.R')
+source('analytics/gmm.R')
 con <- dbConnect(duckdb::duckdb(), "analytics/prepped_data/db.duckdb")
 
 prep_data(con, load_data = FALSE)
 load_distance_data(con)
+run_gmm_model(con)
+
 
 play_filter <- function(.data, play) {
   dbWriteTable(con, "play", play, overwrite = TRUE)
