@@ -144,7 +144,7 @@ df_with_preds |>
   group_by(game_id, play_id, nfl_id_def) |>
   arrange(frame_id, .by_group = TRUE) |>
   mutate(pred_coverage = cummean(V2)) |>
-  filter(player_name == 'Josh Downs') |>
+  filter(player_name == 'Mike Evans') |>
   ggplot(aes(frame_id)) +
   geom_line(aes(y = V2), color = 'blue') +
   geom_line(aes(y = pred_coverage), color = 'red') +
@@ -154,4 +154,90 @@ df_with_preds |>
 dbWriteTable(con, "coverage_assignments", df_with_preds, overwrite = TRUE)
 
 coverage_assignments <- tbl(con, "coverage_assignments")
-combined_data <- tbl(con, "combined_data")
+combined_data <- tbl(con, "combined_data") |>
+  select(
+    game_id,
+    play_id,
+    frame_id,
+    nfl_id,
+    x,
+    y,
+    vx,
+    vy,
+    a,
+    s,
+    s_mph,
+    turn_angle
+  )
+
+coverage_assignments |>
+  select(
+    game_id,
+    play_id,
+    player_name,
+    player_name_def,
+    distance,
+    nfl_id,
+    nfl_id_def,
+    frame_id,
+    pred_coverage = V2
+  ) |>
+  left_join(
+    combined_data,
+    by = c('game_id', 'play_id', 'frame_id', 'nfl_id')
+  ) |>
+  left_join(
+    combined_data,
+    by = c('game_id', 'play_id', 'frame_id', 'nfl_id_def' = 'nfl_id'),
+    suffix = c('', '_def')
+  ) |>
+  group_by(game_id, play_id, nfl_id, nfl_id_def) |>
+  dbplyr::window_order(frame_id) |>
+  mutate(
+    dx_pair = x_def - x,
+    dy_pair = y_def - y,
+    angle_with_def = atan2(dy_pair, dx_pair),
+
+    # previous frame’s angle
+    angle_with_def_prev = lag(angle_with_def),
+
+    # proper wrapped angular difference
+    angle_with_def_diff = atan2(
+      sin(angle_with_def - angle_with_def_prev),
+      cos(angle_with_def - angle_with_def_prev)
+    ),
+    angle_with_def_diff_mag = angle_with_def_diff - lag(angle_with_def_diff),
+    angle_with_def_diff_sign = sign(angle_with_def_diff_mag),
+    diff_turn_angle = atan2(
+      sin(turn_angle - turn_angle_def),
+      cos(turn_angle - turn_angle_def)
+    )
+  ) |>
+  dbplyr::window_frame(-5) |>
+  mutate(pred_coverage = mean(pred_coverage)) |>
+  ungroup() |>
+  collect() -> df
+
+df |>
+  mutate(
+    across(
+      c(angle_with_def_diff, angle_with_def_diff_mag, diff_turn_angle),
+      ~ .x * pred_coverage
+    )
+  ) |>
+  inner_join(play) |>
+  select(
+    frame_id,
+    player_name,
+    player_name_def,
+    diff_turn_angle,
+    #angle_with_def,
+    angle_with_def_diff,
+    angle_with_def_diff_mag,
+    pred_coverage
+  ) |>
+  filter(player_name == 'Mike Evans') |>
+  pivot_longer(-c(frame_id, player_name, player_name_def)) |>
+  ggplot(aes(frame_id, value, color = player_name_def)) +
+  geom_line() +
+  facet_wrap(~name, scales = 'free_y', ncol = 1)
