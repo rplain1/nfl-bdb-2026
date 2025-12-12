@@ -1,113 +1,6 @@
 library(tidyverse)
-#con <- duckdb::dbConnect(duckdb::duckdb(), "analytics/prepped_data/db.duckdb")
-
-tbl(con, "distances") |>
-  filter(
-    player_position %in% c('WR', 'TE', 'RB'),
-    player_to_predict,
-    player_to_predict_def
-  ) |>
-  # group_by(game_id, play_id, off_id, def_id) |>
-  # mutate(min_dist = min(distance)) |>
-  # ungroup() |>
-  # filter(min_dist <= 10) |>
-  mutate(y = y - (53.3 / 2), y_def = y_def - (53.3 / 2)) |>
-  group_by(game_id, play_id, nfl_id, nfl_id_def) |>
-  dbplyr::window_order(frame_id) |>
-  mutate(
-    dist_change = abs(distance - lag(distance)),
-    min_dist_last_5 = sql(
-      "
-      MIN(distance) OVER (
-        PARTITION BY game_id, play_id, nfl_id, nfl_id_def
-        ORDER BY frame_id
-        ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
-      )
-    "
-    ),
-    delta_x = x_def - x,
-    delta_y = y_def - y,
-    rel_speed_toward = (x - x_def) * vx_def + (y - y_def) * vy_def,
-    mag_receiver = sqrt(vx^2 + vy^2),
-    mag_defender = sqrt(vx_def^2 + vy_def^2),
-    dot_prod = vx * vx_def + vy * vy_def,
-    velocity_alignment = dot_prod / (mag_receiver * mag_defender),
-    player_position_def = case_when(
-      player_position_def %in% c('ILB', 'MLB', 'OLB', 'LB') ~ 'LB',
-      player_position_def %in% c('FS', 'S', 'SS') ~ 'S',
-      player_position_def %in% c('DT', 'NT', 'DE') ~ 'DT',
-      TRUE ~ player_position_def
-    )
-  ) |>
-  ungroup() |>
-  filter(frame_id > frame_start) |>
-  select(
-    game_id,
-    play_id,
-    nfl_id,
-    nfl_id_def,
-    player_name,
-    player_name_def,
-    frame_id,
-    distance,
-    dist_change,
-    min_dist_last_5,
-    velocity_alignment,
-    rel_speed_toward,
-    delta_x,
-    delta_y,
-    player_position,
-    player_position_def
-  ) |>
-  left_join(
-    tbl(con, "supplementary_data") |>
-      select(game_id, play_id, team_coverage_man_zone)
-  ) |>
-  collect() |>
-  filter(
-    !is.na(team_coverage_man_zone),
-    team_coverage_man_zone != 'NA'
-  ) -> df_features
-
-
-colSums(is.na(df_features))
-df_features <- na.omit(df_features)
-
-
-library(recipes)
-
-
-X <- recipes::recipe(~., data = df_features) |>
-  recipes::update_role(
-    game_id,
-    play_id,
-    nfl_id,
-    nfl_id_def,
-    frame_id,
-    player_name,
-    player_name_def,
-    new_role = "ID"
-  ) |>
-  recipes::step_dummy(
-    team_coverage_man_zone,
-    player_position,
-    player_position_def
-  ) |>
-  recipes::step_scale(recipes::all_predictors()) |>
-  recipes::prep() |>
-  recipes::bake(new_data = df_features)
-
-X <- X |> select(where(is.numeric), -contains('_id'))
-#BIC <- mclustBIC(X)
-
-library(mclust)
-set.seed(52723)
-mod <- Mclust(X, G = 2)
-
-probs <- as.data.frame(mod$z)
-
-df_with_preds <- df_features |> bind_cols(probs)
-
+library(duckdb)
+con <- duckdb::dbConnect(duckdb::duckdb(), "analytics/prepped_data/db.duckdb")
 
 play <- tibble(
   game_id = c(
@@ -129,6 +22,13 @@ play <- tibble(
   )
 )
 
+jamar_chase_play <- get_supplementary_data() |>
+  filter(
+    week == 1,
+    possession_team == 'CIN',
+    str_detect(play_description, "14:11")
+  ) |>
+  select(play_id, game_id)
 
 tbl(con, "combined_data") |>
   play_filter(play) |>
@@ -138,17 +38,6 @@ tbl(con, "combined_data") |>
   geom_text(aes(label = player_name), size = 3, data = \(x) {
     x |> filter(frame_id == min(frame_id))
   })
-
-df_with_preds |>
-  inner_join(play) |>
-  group_by(game_id, play_id, nfl_id_def) |>
-  arrange(frame_id, .by_group = TRUE) |>
-  mutate(pred_coverage = cummean(V2)) |>
-  filter(player_name == 'Mike Evans') |>
-  ggplot(aes(frame_id)) +
-  geom_line(aes(y = V2), color = 'blue') +
-  geom_line(aes(y = pred_coverage), color = 'red') +
-  facet_wrap(~player_name_def)
 
 
 dbWriteTable(con, "coverage_assignments", df_with_preds, overwrite = TRUE)
@@ -236,8 +125,93 @@ df |>
     angle_with_def_diff_mag,
     pred_coverage
   ) |>
+  mutate(pred_coverage = round(pred_coverage, 2)) |>
   filter(player_name == 'Mike Evans') |>
   pivot_longer(-c(frame_id, player_name, player_name_def)) |>
   ggplot(aes(frame_id, value, color = player_name_def)) +
   geom_line() +
   facet_wrap(~name, scales = 'free_y', ncol = 1)
+
+
+tbl(con, "pair_features") |>
+  group_by(game_id, nfl_id, play_id) |>
+  summarise(diff_turn_angle = max(abs(diff_turn_angle), na.rm = TRUE)) |>
+  select(diff_turn_angle) |>
+  collect() |>
+  ggplot() +
+  geom_histogram(aes(diff_turn_angle), bins = 50)
+
+
+tbl(con, "pair_features") |>
+  #group_by(game_id, nfl_id, play_id) |>
+  filter(frame_id > min(frame_id) + 2) |>
+  mutate(
+    z = (diff_turn_angle - mean(diff_turn_angle, na.rm = TRUE)) /
+      sd(diff_turn_angle, na.rm = TRUE)
+  ) |>
+  group_by(game_id, nfl_id, play_id) |>
+  summarise(
+    diff_turn_angle = max(abs(z), na.rm = TRUE)
+  ) |>
+  ggplot() +
+  geom_histogram(aes(diff_turn_angle))
+
+
+tbl(con, "pair_features") |>
+  left_join(tbl(con, "combined_data") |> distinct(nfl_id, player_position)) |>
+  group_by(game_id, nfl_id, play_id) |>
+  filter(frame_id > min(frame_id) + 2) |>
+  ungroup() |>
+  group_by(game_id, play_id, nfl_id, nfl_id_def) |>
+  mutate(
+    diff_turn_angle = abs(diff_turn_angle),
+    z_turn_angle_diff = (diff_turn_angle -
+      mean(diff_turn_angle, na.rm = TRUE)) /
+      sd(diff_turn_angle, na.rm = TRUE),
+    z_angle_def_mag = (angle_with_def_diff_mag -
+      mean(angle_with_def_diff_mag, na.rm = TRUE)) /
+      sd(angle_with_def_diff_mag, na.rm = TRUE)
+  ) |>
+  inner_join(
+    tbl(con, 'combined_data') |>
+      filter(dataset == 'Y') |>
+      distinct(play_id, game_id, frame_id)
+  ) |>
+  group_by(
+    game_id,
+    nfl_id,
+    play_id,
+    player_name,
+    player_name_def,
+    player_position
+  ) |>
+  summarise(
+    n = n(),
+    z_turn_angle = max(abs(z_turn_angle_diff), na.rm = TRUE),
+    z_angle_mag_min = min(z_angle_def_mag, na.rm = TRUE),
+    z_angle_mag_max = max(z_angle_def_mag, na.rm = TRUE),
+    .groups = 'drop'
+  ) |>
+  #play_filter(play) |>
+  mutate(
+    win = z_turn_angle > 2 & z_angle_mag_min < 2 & z_angle_mag_max > 2
+  ) |>
+  group_by(game_id, play_id, nfl_id, player_name, player_position) |>
+  summarise(
+    win = max(win, na.rm = TRUE)
+  ) |>
+  filter(player_name == 'Mike Evans', win == TRUE)
+group_by(nfl_id, player_name, player_position) |>
+  summarise(
+    n = n(),
+    win = sum(win),
+    .groups = 'drop'
+  ) |>
+  filter(player_position == 'WR') |>
+  mutate(win_perc = win / n) |> #collect() |> count(round(n, -1)) |> mutate(nn = cumsum(n)/sum(n))
+  arrange(-n) |>
+  collect() |>
+  ggplot(aes(n, win)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  ggrepel::geom_text_repel(aes(label = player_name), max.overlaps = 5)

@@ -6,8 +6,8 @@ create_gmm_model_data <- function(con) {
   tbl(con, "distances") |>
     filter(
       player_position %in% c('WR', 'TE', 'RB'),
-      player_to_predict,
-      player_to_predict_def
+      #player_to_predict,
+      #player_to_predict_def
     ) |>
     mutate(y = y - (53.3 / 2), y_def = y_def - (53.3 / 2)) |>
     group_by(game_id, play_id, nfl_id, nfl_id_def) |>
@@ -180,18 +180,18 @@ create_pair_features <- function(con) {
         cos(turn_angle - turn_angle_def)
       )
     ) |>
-    dbplyr::window_frame(-5) |>
+    dbplyr::window_frame(-3) |>
     mutate(pred_coverage = mean(pred_coverage)) |>
     ungroup() |>
     collect() -> df
 
-  df <- df |>
-    mutate(
-      across(
-        c(angle_with_def_diff, angle_with_def_diff_mag, diff_turn_angle),
-        ~ .x * pred_coverage
-      )
-    )
+  # df <- df |>
+  #   mutate(
+  #     across(
+  #       c(angle_with_def_diff, angle_with_def_diff_mag, diff_turn_angle),
+  #       ~ .x * pred_coverage
+  #     )
+  #   )
 
   dbWriteTable(con, "pair_features", df, overwrite = TRUE)
   cli::cli_alert_success(
