@@ -373,10 +373,9 @@ print(train_metrics)
 
 # --------------- FULL MODEL ------------------
 
-dat_split <- initial_split(df_model, prop = 1, strata = is_def_assign)
-dat_train <- training(dat_split)
-dat_test <- testing(dat_split)
+# THIS MIGHT BE TOO MUCH
 
+df_model <- get_xgb_model_input(con, filter_player_to_predict = FALSE)
 
 xgb_fit <- final_wf |>
   fit(dat_train)

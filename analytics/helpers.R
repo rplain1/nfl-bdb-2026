@@ -21,3 +21,14 @@ get_common_plays <- function() {
     2023090700 ,      101 , "Josh Reynolds"
   )
 }
+
+plot_play <- function(play) {
+  tbl(con, "combined_data") |>
+    play_filter(play) |>
+    collect() |>
+    ggplot(aes(x, y)) +
+    geom_point(aes(alpha = frame_id, color = dataset)) +
+    geom_text(aes(label = player_name), size = 3, data = \(x) {
+      x |> filter(frame_id == min(frame_id))
+    })
+}
