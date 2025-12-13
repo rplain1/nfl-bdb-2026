@@ -177,36 +177,41 @@ tbl(con, "distances_2") |>
     overwrite = TRUE
   )
 
-tbl(con, "distances_2") |>
-  filter(player_to_predict, player_to_predict_def) |>
-  inner_join(tbl(con, "coverage_assignments_play")) |>
-  count(is_def_assign) |>
-  mutate(perc = n / sum(n))
 
-tbl(con, "distances_2") |>
-  filter(player_to_predict, player_to_predict_def) |>
-  mutate(
-    player_position_def = case_when(
-      player_position_def %in% c('ILB', 'MLB', 'OLB', 'LB') ~ 'LB',
-      player_position_def %in% c('FS', 'S', 'SS') ~ 'S',
-      player_position_def %in% c('DT', 'NT', 'DE') ~ 'DT',
-      TRUE ~ player_position_def
-    )
-  ) |>
-  filter(
-    player_position %in% c('WR', 'TE', 'RB'),
-    player_position_def %in% c('LB', 'S', 'DT', 'CB')
-  ) |>
-  left_join(tbl(con, "coverage_assignments_play")) |>
-  collect() |>
-  mutate(is_def_assign = as.factor(is_def_assign)) -> df_model
+get_xgb_model_input <- function(con, filter_player_to_predict = TRUE) {
+  df = tbl(con, "distances_2")
 
+  if (filter_player_to_predict) {
+    df = df |> filter(player_to_predict, player_to_predict_def)
+  }
+
+  df |>
+    mutate(
+      player_position_def = case_when(
+        player_position_def %in% c('ILB', 'MLB', 'OLB', 'LB') ~ 'LB',
+        player_position_def %in% c('FS', 'S', 'SS') ~ 'S',
+        player_position_def %in% c('DT', 'NT', 'DE') ~ 'DT',
+        TRUE ~ player_position_def
+      )
+    ) |>
+    filter(
+      player_position %in% c('WR', 'TE', 'RB'),
+      player_position_def %in% c('LB', 'S', 'DT', 'CB')
+    ) |>
+    left_join(tbl(con, "coverage_assignments_play")) |>
+    collect() |>
+    mutate(is_def_assign = as.factor(is_def_assign))
+}
+
+df_model <- get_xgb_model_input(con)
 
 ### Tidymodels wf
 
 library(tidymodels)
 
-# 1. Set up model with parameters to tune
+
+# --------------- MODEL SPEC ------------------
+
 xgb_model <- boost_tree(
   mode = "classification",
   trees = 1000, # can tune this too if desired
@@ -219,26 +224,8 @@ xgb_model <- boost_tree(
 ) %>%
   set_engine("xgboost")
 
-# xgb_model <- boost_tree(mode = "classification") %>%
-#   set_engine("xgboost")
 
-set.seed(52723)
-dat_split <- initial_split(df_model, prop = 0.7, strata = is_def_assign)
-dat_train <- training(dat_split)
-
-dat_folds <- vfold_cv(dat_train, v = 5, strata = is_def_assign)
-
-set.seed(52723)
-xgb_grid <- grid_space_filling(
-  tree_depth(range = c(3, 10)),
-  min_n(range = c(2, 40)),
-  loss_reduction(range = c(-10, 1.5)),
-  sample_size = sample_prop(range = c(0.5, 1.0)),
-  mtry(range = c(5, 15)),
-  learn_rate(range = c(-3, -0.5)),
-  size = 10 #
-)
-
+# --------------- MODEL RECIPE ------------------
 
 xgb_rec <-
   recipe(
@@ -272,35 +259,53 @@ xgb_rec <-
   step_normalize(all_numeric_predictors())
 
 
+# --------------- MODEL TUNE ------------------
+
 xgb_wf <- workflow() %>%
   add_model(xgb_model) %>%
   add_recipe(xgb_rec)
-## TUNNEEEEE -----
-
-# library(mirai)
-# daemons(2)
-
-xgb_tuned <- tune_grid(
-  xgb_wf,
-  resamples = dat_folds,
-  grid = xgb_grid,
-  metrics = metric_set(pr_auc, roc_auc, precision, recall),
-  control = control_grid(save_pred = TRUE, verbose = TRUE)
-)
-
-xgb_tuned |>
-  collect_metrics() |>
-  filter(.metric %in% c('pr_auc', 'roc_auc')) |>
-  arrange(-mean)
 
 
-best_params <- select_best(xgb_tuned, metric = 'pr_auc')
+# --------------- MODEL TUNE ------------------
+
+# set.seed(52723)
+# dat_split <- initial_split(df_model, prop = 0.7, strata = is_def_assign)
+# dat_train <- training(dat_split)
+
+# dat_folds <- vfold_cv(dat_train, v = 5, strata = is_def_assign)
+
+# set.seed(52723)
+# xgb_grid <- grid_space_filling(
+#   tree_depth(range = c(3, 10)),
+#   min_n(range = c(2, 40)),
+#   loss_reduction(range = c(-10, 1.5)),
+#   sample_size = sample_prop(range = c(0.5, 1.0)),
+#   mtry(range = c(5, 15)),
+#   learn_rate(range = c(-3, -0.5)),
+#   size = 10 #
+# )
+
+# xgb_tuned <- tune_grid(
+#   xgb_wf,
+#   resamples = dat_folds,
+#   grid = xgb_grid,
+#   metrics = metric_set(pr_auc, roc_auc, precision, recall),
+#   control = control_grid(save_pred = TRUE, verbose = TRUE)
+# )
+
+# xgb_tuned |>
+#   collect_metrics() |>
+#   filter(.metric %in% c('pr_auc', 'roc_auc')) |>
+#   arrange(-mean)
+
+# best_params <- select_best(xgb_tuned, metric = 'pr_auc')
 saveRDS(best_params, 'analytics/prepped_data.best_params.rds')
 best_params <- select_best(xgb_tuned)
 
-
 final_wf <- finalize_workflow(xgb_wf, best_params)
 
+
+# --------------- MODEL ASSESSMENT ------------------
 
 set.seed(52723)
 dat_split <- initial_split(df_model, prop = 0.7, strata = is_def_assign)
@@ -308,9 +313,11 @@ dat_train <- training(dat_split)
 dat_test <- testing(dat_split)
 
 
-xgb_fit <- final_wf |>
-  fit(dat_train)
-saveRDS(xgb_fit, 'analytics/prepped_data/xgb_mod.rds')
+# xgb_fit <- final_wf |>
+#   fit(dat_train)
+# saveRDS(xgb_fit, 'analytics/prepped_data/xgb_mod.rds')
+
+xgb_fit <- readRDS('analytics/prepped_data/xgb_mod.rds')
 
 # Get class predictions AND probabilities
 test_predictions <- xgb_fit %>%
@@ -364,17 +371,15 @@ train_metrics <- train_predictions %>%
 print(train_metrics)
 
 
-train_predictions |>
-  bind_rows(test_predictions) -> df_output
+# --------------- FULL MODEL ------------------
+
+dat_split <- initial_split(df_model, prop = 1, strata = is_def_assign)
+dat_train <- training(dat_split)
+dat_test <- testing(dat_split)
+
+
+xgb_fit <- final_wf |>
+  fit(dat_train)
 
 
 dbWriteTable(con, 'coverage_predictions', df_output, overwrite = T)
-
-
-df_output |>
-  #filter(frame_id >= 10) |>
-  ggplot(aes(frame_id, z_turn, color = .pred_1 > 0.45)) +
-  geom_point() +
-  geom_hline(yintercept = 3, linetype = 'dashed') +
-  geom_hline(yintercept = -3, linetype = 'dashed') +
-  facet_wrap(~ paste(player_name, player_name_def, sep = '\n'))
