@@ -1,0 +1,531 @@
+
+```{r}
+tbl(con, "distances") |>
+    play_filter(get_common_plays()) |>
+    mutate(
+    diff_turn_angle = atan2(
+      sin(turn_angle - turn_angle_def),
+      cos(turn_angle - turn_angle_def)
+    )
+) |>
+    filter(frame_id > 5) |>
+    collect() -> distance_df
+```
+
+## Big Turn Angle Shift
+
+```{r}
+distance_df |>
+  select(frame_id, player_name, player_name_def, contains('turn_angle')) |>
+  filter(player_name == 'Mike Williams', player_name_def == 'Byron Murphy') |>
+  ggplot(aes(frame_id)) +
+  geom_line(aes(y = turn_angle, color = 'Receiver'), size = 1.25, alpha = 0.5) +
+  geom_line(
+    aes(y = turn_angle_def, color = 'Defender'),
+    alpha = 0.5,
+    size = 1.25
+  ) +
+  geom_line(
+    aes(y = diff_turn_angle, color = 'Turn Angle Difference'),
+    size = 2
+  ) +
+  geom_vline(xintercept = 22, linetype = 'dashed') +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'top') +
+  labs(
+    title = "Clear turn angle difference on a go route",
+    x = 'Frame',
+    y = 'Turn Angle (radians)',
+    color = NULL
+  ) +
+    scale_y_continuous(limits = c(-pi, pi)) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick'))
+
+ggsave('img/big_turn_angle_shift.png', width = 6, height = 4)
+```
+
+
+```{r}
+distance_df |>
+  select(frame_id, player_name, player_name_def, contains('turn_angle')) |>
+  filter(player_name == 'Garrett Wilson', player_name_def == 'Trevon Diggs') |>
+  ggplot(aes(frame_id)) +
+  geom_line(aes(y = turn_angle, color = 'Receiver'), size = 1.25, alpha = 0.5) +
+  geom_line(
+    aes(y = turn_angle_def, color = 'Defender'),
+    alpha = 0.5,
+    size = 1.25
+  ) +
+  geom_line(
+    aes(y = diff_turn_angle, color = 'Turn Angle Difference'),
+    size = 1.25
+  ) +
+  geom_vline(xintercept = 22, linetype = 'dashed') +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'top') +
+  labs(
+    title = "No clear turn angle difference on a go route",
+    x = 'Frame',
+    y = 'Turn Angle (radians)',
+    color = NULL
+  ) +
+  scale_y_continuous(limits = c(-pi, pi)) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick'))
+
+ggsave('img/small_turn_angle_shift.png', width = 6, height = 4)
+```
+
+
+
+
+
+```{r}
+hash_y <- c(23.5, 53.3 - 23.5)
+
+tbl(con, "combined_data") |>
+  play_filter(get_common_plays() |> select(-player_name)) |>
+  filter(play_id == 2741) |>
+  mutate(
+    color = case_when(
+      player_name == 'Mike Williams' ~ 'Receiver',
+      player_name == 'Byron Murphy' ~ 'Defender',
+      TRUE ~ 'Other'
+    ),
+    alpha = case_when(
+      player_name == 'Mike Williams' ~ 1,
+      player_name == 'Byron Murphy' ~ 1,
+      T ~ 0.6
+    )
+  ) |>
+  ggplot() +
+  # Field markings
+  geom_rect(
+    aes(xmin = -10, xmax = 30, ymin = 0, ymax = 53.3),
+    fill = "white",
+    color = "black",
+    alpha = 0.2
+  ) + # Example endzone
+  geom_vline(
+    xintercept = seq(0, 30, by = 10),
+    color = "black",
+    linetype = "dashed",
+    alpha = 0.5
+  ) + # Yard lines
+  geom_segment(
+    data = expand.grid(x = seq(-10, 30, by = 1), y = hash_y),
+    aes(x = x, xend = x, y = y - 0.2, yend = y + 0.2),
+    color = "black"
+  ) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = c(0, 53.3), color = "black") + # Sidelines
+  geom_point(
+    aes(x, y, color = color, group = nfl_id, alpha = alpha),
+    show.legend = c(alpha = FALSE)
+  ) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick')) +
+  theme_void(base_size = 12) +
+  theme(legend.position = 'top', panel.grid = element_blank()) +
+  labs(
+    title = "No clear turn angle difference on a go route",
+    x = 'Sideline',
+    y = 'Endzone',
+    color = NULL
+  )
+
+ggsave('img/big_turn_angle_shift_play.png', width = 6, height = 4)
+
+```
+
+
+
+
+```{r}
+hash_y <- c(23.5, 53.3 - 23.5)
+
+tbl(con, "combined_data") |>
+  play_filter(get_common_plays() |> select(-player_name)) |>
+  filter(play_id == 3659) |>
+  mutate(
+    color = case_when(
+      player_name == 'Garrett Wilson' ~ 'Receiver',
+      player_name == 'Trevon Diggs' ~ 'Defender',
+      TRUE ~ 'Other'
+    ),
+    alpha = case_when(
+      player_name == 'Garrett Wilson' ~ 1,
+      player_name == 'Trevon Diggs' ~ 1,
+      T ~ 0.6
+    )
+  ) |>
+  ggplot() +
+  # Field markings
+  geom_rect(
+    aes(xmin = -10, xmax = 30, ymin = 0, ymax = 53.3),
+    fill = "white",
+    color = "black",
+    alpha = 0.2
+  ) + # Example endzone
+  geom_vline(
+    xintercept = seq(0, 30, by = 10),
+    color = "black",
+    linetype = "dashed",
+    alpha = 0.5
+  ) + # Yard lines
+  geom_segment(
+    data = expand.grid(x = seq(-10, 30, by = 1), y = hash_y),
+    aes(x = x, xend = x, y = y - 0.2, yend = y + 0.2),
+    color = "black"
+  ) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = c(0, 53.3), color = "black") + # Sidelines
+  geom_point(
+    aes(x, y, color = color, group = nfl_id, alpha = alpha),
+    show.legend = c(alpha = FALSE)
+  ) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick')) +
+  theme_void(base_size = 12) +
+  theme(legend.position = 'top', panel.grid = element_blank()) +
+  labs(
+    title = "No clear turn angle difference on a go route",
+    x = 'Sideline',
+    y = 'Endzone',
+    color = NULL
+  )
+
+ggsave('img/small_turn_angle_shift_play.png', width = 6, height = 4)
+
+```
+
+
+
+```{r}
+distance_df |>
+  filter(player_name == 'Mike Williams', player_name_def == 'Byron Murphy') |>
+  ggplot(aes(frame_id)) +
+  geom_line(aes(y = a, color = 'Receiver'), size = 1.25, alpha = 0.5) +
+  geom_line(
+    aes(y = a_def, color = 'Defender'),
+    alpha = 0.5,
+    size = 1.25
+  ) +
+  geom_line(
+    aes(y = diff_turn_angle, color = 'Turn Angle Difference'),
+    size = 2
+  ) +
+  geom_vline(xintercept = 22, linetype = 'dashed') +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'top') +
+  labs(
+    title = "Clear turn angle difference on a go route",
+    x = 'Frame',
+    y = 'Turn Angle (radians)',
+    color = NULL
+  ) +
+  #scale_y_continuous(limits = c(-pi, pi)) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick'))
+
+
+distance_df |>
+  filter(
+    player_name == 'Trent Sherfield',
+    player_name_def == 'Benjamin St-Juste',
+    frame_id > 9
+  ) |>
+  arrange(frame_id, .by_group = T) |>
+  mutate(
+    a_diff = a - a_def,
+  ) |>
+select(frame_id, starts_with('player_name'), a_diff, diff_turn_angle) |>
+pivot_longer(contains('diff')) |>
+ggplot(aes(frame_id)) +
+  geom_line(aes(y = value, color = name), size = 1.25, alpha = 0.5) +
+  geom_vline(xintercept = 13, linetype = 'dashed') +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'top') +
+  facet_wrap(~name, ncol = 1, scales = 'free_y') +
+  #scale_y_continuous(limits = c(-pi, pi)) +
+  scale_color_manual(values = c('midnightblue', '#2F4F4F', 'firebrick'))
+```
+
+
+
+
+```{r}
+df |>
+  #inner_join(df |> distinct(game_id, play_id) |> slice_sample(n = 1)) |>
+  play_filter(
+    get_common_plays() |>
+      filter(!player_name %in% c('Trent Sherfield', 'Amon-Ra St. Brown'))
+  ) |>
+  collect() |>
+  group_by(game_id, play_id, nfl_id, nfl_id_def) |>
+  arrange(frame_id) |>
+  mutate(
+    z_turn_ra = (z_turn_play + lag(z_turn_play) + +lag(z_turn_play, 2)) / 3
+  ) |>
+  ungroup() |>
+  select(
+    game_id,
+    frame_id,
+    player_name,
+    player_name_def,
+    cov_max,
+    pred_coverage = .pred_1,
+    rolling_pred_coverage = pred_coverage,
+    diff_turn_angle,
+    turn_angle,
+    turn_angle_def,
+    a,
+    a_def,
+    accel_change,
+    accel_change_def,
+    accel_diff,
+    z_turn_pop,
+    z_turn_play
+  ) |>
+  pivot_longer(cov_max:z_turn_play) |>
+  #filter(str_detect(name, "pred") | name == 'cov_max') |>
+  filter(str_detect(name, "pred")) |>
+  #filter(frame_id > 10) |>
+  ggplot(aes(frame_id, value, color = name)) +
+  geom_line() +
+  #geom_hline(yintercept = c(-2, 2), linetype = 'dashed') +
+  facet_wrap(
+    ~ paste(player_name, player_name_def, sep = '\n'),
+    scales = 'free_x'
+  ) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'bottom') +
+  labs(
+    x = NULL,
+    y = 'Probability of Coverage',
+    color = NULL
+  ) +
+  scale_y_continuous(labels = scales::percent_format())
+
+ggsave('img/pred_coverage.png', width = 6, height = 4)
+
+
+```
+
+
+
+
+ ```{r}
+me <-  df_stg  |>
+    ungroup() |>
+    inner_join(get_common_plays()) |>
+    filter(player_name == 'Mike Evans')
+
+me |>
+    select(frame_id, distance, a, a_def, accel_diff, distance_diff, z_turn_play, impact_contrib) |>
+    pivot_longer(-frame_id) |>
+    ggplot(aes(frame_id, value)) +
+    geom_line() +
+    geom_vline(xintercept = 24) +
+    facet_wrap(~name, scales = 'free', ncol = 2)
+
+
+
+me |>
+    select(frame_id, distance, a, a_def, accel_diff, distance_diff, z_turn_play, impact_contrib, delta_recovery) |>
+    pivot_longer(-frame_id) |>
+    ggplot(aes(frame_id, value)) +
+    geom_line() +
+    geom_vline(xintercept = 24) +
+    facet_wrap(~name, scales = 'free', ncol = 2)
+```
+
+```{r}
+fp1 <- me |>
+  ggplot(aes(frame_id, z_turn_pop)) +
+  geom_line(color = "#1f77b4", linewidth = 1) +
+  geom_hline(yintercept = c(-2, 2), linetype = 'dashed') +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  labs(
+    title = "Z-score of turn angle difference",
+    x = NULL,
+    y = "Z-score"
+  )
+
+
+fp2 <- me |>
+  ggplot(aes(frame_id, distance)) +
+  geom_line(color = "#ff7f0e", linewidth = 1) +
+  geom_vline(xintercept = 24, linetype = 'dashed') +
+  annotate(
+    "text",
+    x = 24,
+    y = 6,
+    label = "Breakpoint",
+    angle = 270,
+    vjust = -0.95
+  ) +
+  geom_vline(xintercept = 42, linetype = 'dashed') +
+  annotate(
+    "text",
+    x = 42,
+    y = 6,
+    label = "Max Distance",
+    angle = 270,
+    vjust = -0.95
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  labs(
+    title = "Distance",
+    x = NULL,
+    y = "Distance (yards)"
+  )
+
+
+fp3 <- me |>
+  ggplot(aes(frame_id, distance_diff)) +
+  geom_line(color = "#2ca02c", linewidth = 1) +
+  geom_vline(xintercept = 24, linetype = 'dashed') +
+  annotate(
+    "text",
+    x = 24,
+    y = 0,
+    label = "Breakpoint",
+    angle = 270,
+    vjust = -0.95
+  ) +
+  geom_vline(xintercept = 28, linetype = 'dashed') +
+  annotate(
+    "text",
+    x = 28,
+    y = -0.4,
+    label = "Min Distance",
+    angle = 270,
+    vjust = -0.95
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  labs(
+    title = "Change in Distance",
+    x = NULL,
+    y = "Δ Distance (yards)"
+  )
+
+
+fp4 <- me |>
+  ggplot(aes(frame_id, delta_recovery)) +
+  geom_line(color = '#d62728', linewidth = 1) +
+  geom_vline(xintercept = 24, linetype = 'dashed') +
+  annotate(
+    "text",
+    x = 24,
+    y = 1.5,
+    label = "Breakpoint",
+    angle = 270,
+    vjust = -0.95
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  labs(
+    title = "Ground Lost",
+    x = NULL,
+    y = "Ground Lost (yards)"
+  )
+
+(fp1 | fp2) / (fp3 | fp4)
+
+ggsave('img/derivatives.png', width = 10, height = 8)
+
+```
+
+
+
+```{r}
+library(gt)
+library(gt)
+library(dplyr)
+
+.df |>
+  filter(sep_id > 0) |>
+  inner_join(get_common_plays()) |>
+  mutate(recovery_frames = recovery_frames / 10) |>
+  select(
+    game_id,
+    play_id,
+    player_name,
+    player_name_def,
+    player_position_def,
+    max_distance,
+    recovery_auc,
+    peak_recovery_gap,
+    recovery_frames,
+    ESS,
+    SSS = ISI,
+    ESC = SEP_DELTA
+  ) |>
+  gt() |>
+  tab_header(
+    title = "Effective Separation",
+  ) |>
+  cols_label(
+    game_id = "Game ID",
+    play_id = "Play ID",
+    player_name = "Receiver",
+    player_name_def = "Defender",
+    player_position_def = "Def Pos",
+    max_distance = "Max Distance",
+    recovery_auc = "Gap Closure",
+    peak_recovery_gap = "Peak Recovery Distance",
+    recovery_frames = "Recovery Time (Seconds)",
+    ESS = "ESS",
+    SSS = "SSS",
+    ESC = "ESC"
+  ) |>
+  fmt_number(
+    columns = c(
+      max_distance,
+      recovery_auc,
+      peak_recovery_gap,
+      recovery_frames,
+      ESS,
+      SSS,
+      ESC
+    ),
+    decimals = 2
+  ) |>
+  data_color(
+    columns = ESC,
+    palette = "Purples"
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) |>
+  tab_style(
+    style = cell_fill(color = "#f0f0f0"),
+    locations = cells_body(columns = c(player_name, player_name_def))
+  ) |>
+  tab_options(
+    table.font.size = px(12),
+    heading.title.font.size = px(16),
+    heading.subtitle.font.size = px(13),
+    column_labels.font.weight = "bold"
+  ) |>
+  cols_align(
+    align = "center",
+    columns = c(player_position_def)
+  ) |>
+  cols_align(
+    align = "right",
+    columns = c(
+      max_distance,
+      recovery_auc,
+      peak_recovery_gap,
+      recovery_frames,
+      ESS,
+      SSS,
+      ESC
+    )
+  ) -> my_table
+
+gtsave(my_table, "img/separation_table.png")
+
+```
